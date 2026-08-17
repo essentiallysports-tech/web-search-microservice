@@ -173,7 +173,7 @@ against six leak types. If it blocks you, it is probably right.
 
 ```bash
 git remote add origin git@github.com:YOUR-ORG/search-service.git
-git push -u origin main
+git push -u origin master
 ```
 
 **Private.** The repo contains your cost model, provider strategy, and admin endpoint
@@ -358,7 +358,7 @@ gated on CI passing.
 
 It is **manual-trigger by default** (Actions → Deploy to EC2 → type `deploy`), because
 deploying costs money when it runs and a bad deploy is downtime for every consuming app.
-To deploy on every merge to `main`, uncomment the `push:` trigger — keep the `needs: ci`
+To deploy on every merge to `master`, uncomment the `push:` trigger — keep the `needs: ci`
 gate either way.
 
 Repository secrets required (**Settings → Secrets → Actions**):

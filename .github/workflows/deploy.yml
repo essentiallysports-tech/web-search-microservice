@@ -14,7 +14,7 @@ on:
         required: true
         default: ''
   # push:
-  #   branches: [main]
+  #   branches: [master]
 
 concurrency:
   # Two deploys racing on one box would interleave container restarts.
@@ -54,8 +54,8 @@ jobs:
             cd ~/search-service
 
             # Fail loudly rather than deploying a stale tree.
-            git fetch --quiet origin main
-            git reset --hard origin/main
+            git fetch --quiet origin master
+            git reset --hard origin/master
 
             # .env lives only on the server and is never in the repo, so a reset
             # cannot clobber it — but check, because deploying without it would

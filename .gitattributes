@@ -1,0 +1,41 @@
+# Line endings, pinned deliberately.
+#
+# This repo is authored on Windows and runs on Linux. Without these rules, git converts
+# shell scripts to CRLF on Windows checkout, and a script whose shebang reads
+# `#!/usr/bin/env bash\r` fails on the EC2 box with:
+#
+#   /usr/bin/env: 'bash\r': No such file or directory
+#
+# — which is an obscure error to hit while bootstrapping a production host. Anything
+# executed by Linux is forced to LF regardless of the client's core.autocrlf setting.
+
+* text=auto
+
+# Executed on the server. Must be LF.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+deploy/githooks/pre-commit text eol=lf
+
+# Read by tools that are whitespace-sensitive or run inside containers.
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.conf          text eol=lf
+
+# python-dotenv tolerates CRLF, but a stray \r inside an API key would be invisible in
+# a diff and produce a 401 that looks like a wrong key.
+.env.example       text eol=lf
+.env.prod.example  text eol=lf
+
+# Python and TypeScript: LF everywhere for consistent diffs across the team.
+*.py            text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.json          text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+
+# Never touch these.
+*.png           binary
+*.jpg           binary
+*.ico           binary
+*.pdf           binary

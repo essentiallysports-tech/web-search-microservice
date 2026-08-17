@@ -63,7 +63,11 @@ for file in $staged; do
   content=$(git show ":$file" 2>/dev/null) || continue
 
   for pattern in "${patterns[@]}"; do
-    if match=$(grep -nEm1 "$pattern" <<< "$content"); then
+    # -e is required, not optional: the PEM pattern starts with '-----', which grep
+    # parses as options without it. That silently disabled the private-key check
+    # entirely while flooding stderr with usage errors — the check appeared to run and
+    # matched nothing, which is the worst failure mode a security check can have.
+    if match=$(grep -nEm1 -e "$pattern" <<< "$content"); then
       line=${match%%:*}
       echo "${RED}BLOCKED${OFF} $file:$line — looks like a live credential."
       echo "          pattern: $pattern"

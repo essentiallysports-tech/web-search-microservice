@@ -1,0 +1,71 @@
+# Overlay for a 2GB instance (t3.small). Apply ON TOP of the prod overlay:
+#
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.prod.yml \
+#                  -f docker-compose.t3small.yml up -d
+#
+# Sized from measurement, not guesswork. On this build, extracting ten large
+# Wikipedia articles took the API container from 84MiB to 352MiB, and it plateaued
+# there across forty pages — Python's allocator keeps the arena rather than returning
+# it, so 352MiB is the steady state after any real extraction load, not a leak.
+#
+# Budget on 2GB:
+#   OS + dockerd + sshd + host nginx   ~350 MB
+#   api                                 768 MB   (2.2x the measured plateau)
+#   redis                               512 MB
+#   ------------------------------------------
+#   total                              ~1.63 GB of 2 GB, leaving ~370 MB slack
+#
+# The prod overlay's 2g api limit does NOT fit here alongside Redis at 1200m.
+
+services:
+  api:
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+        reservations:
+          memory: 256m
+    environment:
+      # ---------------------------------------------------------------- memory
+      #
+      # The L1 cache is bounded by ENTRY COUNT, not bytes, and extracted pages go
+      # into it with their full markdown. Measured at ~330KB of markdown per large
+      # page, 512 entries is a ~165MB ceiling — the single largest tunable
+      # contributor to peak memory.
+      #
+      # 128 caps that near 40MB. The cost is L1 misses falling through to Redis,
+      # which is a ~3ms round trip rather than a provider call, so this trades
+      # latency for headroom and never trades money.
+      LOCAL_CACHE_SIZE: 128
+
+      # Peak memory scales with how many pages are being parsed at once: lxml builds
+      # a DOM roughly 5-10x the source size, and MAX_HTML_BYTES allows 4MB per page.
+      # Halving process-wide concurrency roughly halves the worst-case live tree set.
+      #
+      # Measured throughput cost: the burst above ran at 1.2 cores average, so on 2
+      # vCPU there was little headroom to use 10 concurrent fetches anyway.
+      MAX_CONCURRENCY: 5
+      EXTRACT_CONCURRENCY: 3
+
+  redis:
+    # 384mb of usable cache with the container capped at 512m — the gap leaves room
+    # for Redis's own overhead and fragmentation, so eviction kicks in before the
+    # container is killed. Keep the container limit ABOVE maxmemory or the OOM killer
+    # wins the race against the eviction policy.
+    #
+    # What this costs: payloads are zstd-compressed (3-5x on prose), so a page entry
+    # is ~80KB and 384mb holds roughly 4,800 pages against ~12,800 at 1gb. For a
+    # working set of a few thousand hot pages that is still ample, but it IS the
+    # setting to suspect if the cache hit rate drifts below the 79% baseline — and a
+    # falling hit rate costs provider calls, which is real money.
+    command: >
+      valkey-server
+      --save ""
+      --appendonly no
+      --maxmemory 384mb
+      --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: 512m

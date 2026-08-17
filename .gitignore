@@ -1,0 +1,64 @@
+# ------------------------------------------------------------------- secrets
+#
+# `.env` holds live Serper, Brave, Firecrawl and Anthropic credentials plus the
+# service's own admin keys. It must never reach the repository — the tracked
+# templates are `.env.example` and `.env.prod.example`, which carry no values.
+#
+# `deploy/pre-commit` is a second line of defence; install it with:
+#   git config core.hooksPath deploy/githooks
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Certificates and private keys, in case one is ever generated in-tree.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*.ppk
+
+# -------------------------------------------------------------------- tests
+#
+# Deliberately NOT pushed — kept on the local machine only.
+#
+# Consequences to be aware of:
+#   - CI cannot run them, so `.github/workflows/ci.yml` verifies only that the image
+#     builds and that no credential is committed. Nothing gates correctness.
+#   - A clone (including the EC2 box) has no way to self-verify.
+#   - They exist in exactly ONE place. There is no second copy anywhere.
+#
+# Run them locally before every push:
+#   python -m pytest tests -q          # expect 502 passed
+tests/
+
+# ------------------------------------------------------------------- python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+
+# --------------------------------------------------------------------- node
+# admin-ui carries its own .gitignore too; these cover an invocation from the root.
+node_modules/
+.next/
+.vercel/
+next-env.d.ts
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------- misc
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+.nginx-test/

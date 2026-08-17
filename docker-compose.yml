@@ -1,0 +1,63 @@
+name: essentially-web-search
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        # The ladder is trafilatura -> http_retry -> firecrawl. There is no local
+        # browser and no build knob for one; use "[]" to drop the /research layer
+        # as well.
+        EXTRAS: "[llm]"
+    env_file:
+      - .env
+    environment:
+      # Container-network address always wins over whatever .env says, so the
+      # same .env works for both local and in-compose runs.
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # Deliberately left at 4g. It was sized when Chromium could take ~1GB per
+          # context, and the last measurement was 622MB of 4GB under browser load —
+          # so it is now generous by an unknown margin. Lowering it without
+          # measuring the real page-cache working set would be trading a known-safe
+          # ceiling for a guess; measure first, then trim. See PROGRESS.md Phase 12.
+          memory: 4g
+    restart: unless-stopped
+    logging: *default-logging
+
+  redis:
+    # Valkey is a drop-in, BSD-licensed Redis fork — redis-py talks to it
+    # unchanged. Swap to `docker.io/redis:7-alpine` if you prefer upstream.
+    image: docker.io/valkey/valkey:8-alpine
+    # Pure cache: persistence off (faster, no disk cost), LRU eviction so a full
+    # instance sheds cold pages instead of erroring on write.
+    command: >
+      valkey-server
+      --save ""
+      --appendonly no
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1200m
+    restart: unless-stopped
+    logging: *default-logging

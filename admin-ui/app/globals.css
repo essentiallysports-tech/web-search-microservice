@@ -1,0 +1,276 @@
+/* Light and dark from one token set, following the OS. */
+:root {
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --border: #e4e4e1;
+  --border-strong: #d0d0cc;
+  --text: #1a1a18;
+  --text-dim: #6b6b66;
+  --accent: #1c5d3f;
+  --accent-text: #ffffff;
+  --danger: #a02c1f;
+  --danger-bg: #fdf1ef;
+  --warn-bg: #fdf8e8;
+  --warn-border: #e8dca8;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --surface: #1f1f23;
+    --border: #2e2e34;
+    --border-strong: #3d3d45;
+    --text: #ececf0;
+    --text-dim: #9a9aa4;
+    --accent: #4ba97a;
+    --accent-text: #10231a;
+    --danger: #f08b7d;
+    --danger-bg: #2a1b19;
+    --warn-bg: #262115;
+    --warn-border: #4a3f22;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+
+h1 {
+  font-size: 21px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+h2 {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: 34px 0 12px;
+}
+
+p {
+  margin: 0 0 14px;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+}
+
+.sub {
+  color: var(--text-dim);
+  font-size: 13.5px;
+  margin: 6px 0 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+/* ------------------------------------------------------------------ forms */
+
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+  margin-bottom: 6px;
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin: 5px 0 0;
+}
+
+input,
+select {
+  width: 100%;
+  padding: 9px 11px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.row > *:first-child {
+  flex: 1 1 240px;
+}
+
+button {
+  font: inherit;
+  font-weight: 550;
+  padding: 9px 16px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--border-strong);
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  color: var(--danger);
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------------------ table */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 0 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 11px 12px 11px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.empty {
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+/* ------------------------------------------------------------------ notes */
+
+.alert {
+  border-radius: 6px;
+  padding: 11px 13px;
+  font-size: 13.5px;
+  margin-bottom: 16px;
+  border: 1px solid;
+}
+
+.alert.error {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.reveal {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 22px;
+}
+
+.reveal strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.secret {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 4px;
+}
+
+.secret input {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.pill {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--text-dim);
+}

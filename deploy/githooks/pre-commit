@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#
+# Blocks commits that would leak a credential. Enable once per clone:
+#
+#   git config core.hooksPath deploy/githooks
+#
+# .gitignore already excludes .env, but a hook catches the cases it cannot:
+# `git add -f`, a renamed copy (`.env.backup2`, `env.txt`), a key pasted into a
+# script, or someone editing .gitignore. This repo's .env holds live Serper,
+# Firecrawl and Anthropic credentials, so the cost of a mistake is real money and a
+# rotation across four providers.
+#
+# Bypass deliberately with `git commit --no-verify` if you are certain.
+
+set -uo pipefail
+
+RED=$'\033[1;31m'; YEL=$'\033[1;33m'; OFF=$'\033[0m'
+fail=0
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[[ -z "$staged" ]] && exit 0
+
+# ------------------------------------------------------- 1. dangerous filenames
+while IFS= read -r file; do
+  case "$(basename "$file")" in
+    .env|.env.local|.env.prod|.env.production)
+      echo "${RED}BLOCKED${OFF} $file — this is a live secrets file."
+      fail=1
+      ;;
+    *.pem|*.key|id_rsa|*.p12|*.pfx)
+      echo "${RED}BLOCKED${OFF} $file — looks like a private key."
+      fail=1
+      ;;
+  esac
+done <<< "$staged"
+
+# ------------------------------------------------------- 2. credential patterns
+#
+# Matched against staged CONTENT, not the working tree, so it sees exactly what
+# would be committed. Patterns are the real prefixes used by this project's
+# providers plus its own token format.
+#
+#   esw_        this service's issued API tokens and admin keys
+#   fc-         Firecrawl
+#   sk-ant-     Anthropic
+#   BSA         Brave subscription tokens
+#   AKIA        AWS access key IDs
+patterns=(
+  'esw_[A-Za-z0-9_-]{20,}'
+  'fc-[a-f0-9]{24,}'
+  'sk-ant-[A-Za-z0-9_-]{20,}'
+  'BSA[A-Za-z0-9_-]{20,}'
+  'AKIA[0-9A-Z]{16}'
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+)
+
+for file in $staged; do
+  # Templates exist to document the variable names, so their placeholders are fine.
+  case "$file" in
+    *.example|*.md|deploy/githooks/pre-commit) continue ;;
+  esac
+
+  content=$(git show ":$file" 2>/dev/null) || continue
+
+  for pattern in "${patterns[@]}"; do
+    if match=$(grep -nEm1 "$pattern" <<< "$content"); then
+      line=${match%%:*}
+      echo "${RED}BLOCKED${OFF} $file:$line — looks like a live credential."
+      echo "          pattern: $pattern"
+      fail=1
+    fi
+  done
+done
+
+# ------------------------------------- 3. a populated key in a tracked template
+#
+# `.env.example` and `.env.prod.example` are supposed to ship with EMPTY values.
+# A filled-in one is the most likely accidental leak, because it looks like a
+# harmless doc change in a diff.
+for file in $staged; do
+  case "$file" in
+    *.env.example|*.env.prod.example|.env.example|.env.prod.example) ;;
+    *) continue ;;
+  esac
+
+  if git show ":$file" 2>/dev/null \
+     | grep -nE '^(SERPER|BRAVE|FIRECRAWL|ANTHROPIC|SERVICE)_?[A-Z_]*(KEY|KEYS)=.+' \
+     | grep -vE '=\s*(#|$)'; then
+    echo "${RED}BLOCKED${OFF} $file — a template has a real-looking value in it."
+    echo "          Templates must ship with empty values."
+    fail=1
+  fi
+done
+
+if (( fail )); then
+  cat <<EOF
+
+${YEL}Commit refused.${OFF}
+
+  Unstage the offending file:   git restore --staged <file>
+  If a secret was already committed in an earlier commit, rotating the credential
+  is the only real fix — removing it from history does not un-leak it.
+
+  Override only if you are certain:  git commit --no-verify
+
+EOF
+  exit 1
+fi
+
+exit 0

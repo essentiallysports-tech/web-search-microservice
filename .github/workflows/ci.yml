@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets the deploy workflow depend on this one having passed.
+  workflow_call:
+
+# ============================================================================
+# WHAT THIS DOES AND DOES NOT VERIFY
+#
+# `tests/` is gitignored by choice — the 502-test suite lives on the developer's
+# machine and is not pushed. So CI CANNOT check correctness. It checks three things
+# that do not need the suite:
+#
+#   1. the package installs
+#   2. the image builds and the app imports inside it
+#   3. no credential has been committed
+#
+# That means a green check here does NOT mean the code works. Run the suite locally
+# before pushing:
+#
+#   python -m pytest tests -q        # expect 502 passed
+#
+# The test job below runs the suite IF it is present, so this workflow starts gating
+# correctness automatically the day `tests/` is un-ignored — no edit needed.
+# ============================================================================
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Match the container, not the newest available — CI passing on a version
+          # production does not run is worth little.
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev,llm]"
+
+      - name: Tests
+        run: |
+          if [[ -d tests && -n "$(ls -A tests/*.py 2>/dev/null)" ]]; then
+            python -m pytest tests -q
+          else
+            echo "::notice title=Suite not in repo::tests/ is gitignored, so correctness is NOT verified here. Run 'python -m pytest tests -q' locally before pushing."
+          fi
+
+      - name: Lint
+        # Informational: there is a pre-existing backlog of style findings (mostly long
+        # lines), and failing the build on them would block real work without improving
+        # anything. Drop the `|| true` once that is cleared.
+        run: ruff check app scripts || true
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No credential was committed
+        # Third layer, after .gitignore and the pre-commit hook. A leak that reaches the
+        # remote costs a rotation across four providers, so it is worth checking here
+        # too — this is the only layer someone cannot skip with --no-verify.
+        run: |
+          if git ls-files | grep -qE '^\.env$'; then
+            echo "::error::.env is tracked. Remove it and rotate every credential in it."
+            exit 1
+          fi
+          if git grep -nE 'esw_[A-Za-z0-9_-]{20,}|fc-[a-f0-9]{24,}|sk-ant-[A-Za-z0-9_-]{20,}|BSA[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' \
+               -- ':!*.md' ':!deploy/githooks/*' ':!.github/*'; then
+            echo "::error::a live-looking credential is committed. Rotate it, then remove it."
+            exit 1
+          fi
+          echo "clean"
+
+  image:
+    # Proves the image builds before a deploy tries it on the server, where a failure
+    # means downtime rather than a red check. With the suite absent, this is the main
+    # thing standing between a broken commit and production.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t search-service:ci .
+
+      - name: App imports inside the image
+        run: docker run --rm search-service:ci python -c "import app.main; print('ok')"
+
+      - name: Endpoints are registered
+        # Catches a wiring mistake that an import alone would not: a router that fails to
+        # mount still lets `import app.main` succeed. With the test suite absent from the
+        # repo, this is the closest thing CI has to a functional check.
+        #
+        # Routes have to be walked recursively — FastAPI wraps each `include_router` call
+        # in an `_IncludedRouter` whose own children live under `.original_router`.
+        run: |
+          docker run --rm search-service:ci python -c "
+          from app.main import create_app
+
+          def walk(routes):
+              for r in routes:
+                  p = getattr(r, 'path', None)
+                  if p:
+                      yield p
+                  inner = getattr(r, 'original_router', None) or getattr(r, 'router', None)
+                  if inner is not None and getattr(inner, 'routes', None):
+                      yield from walk(inner.routes)
+
+          paths = set(walk(create_app().routes))
+          need = {'/search', '/search_and_extract', '/extract', '/research', '/health', '/livez'}
+          missing = need - paths
+          assert not missing, f'missing routes: {sorted(missing)}'
+          assert any(p.startswith('/admin') for p in paths), 'admin routes not mounted'
+          print(f'{len(need)} public endpoints + admin present')
+          "

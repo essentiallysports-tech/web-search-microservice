@@ -1,0 +1,96 @@
+name: Deploy to EC2
+
+# Manual by default. Deploying this service costs money when it runs (every cache
+# miss is a billed provider call), and a bad deploy is downtime for every consuming
+# app — so a human decides when, rather than every push to main going live.
+#
+# To deploy automatically on merge instead, uncomment the `push` trigger. Keep the
+# `needs: ci` gate either way.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm'
+        required: true
+        default: ''
+  # push:
+  #   branches: [main]
+
+concurrency:
+  # Two deploys racing on one box would interleave container restarts.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    # A commit that fails tests must not be able to reach production.
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+
+    steps:
+      - name: Check the confirmation
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [[ "${{ github.event.inputs.confirm }}" != "deploy" ]]; then
+            echo "::error::type 'deploy' in the confirm field to proceed"
+            exit 1
+          fi
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # Longer than the deploy script's own 90s health gate plus the image build.
+          command_timeout: 12m
+          script: |
+            set -euo pipefail
+            cd ~/search-service
+
+            # Fail loudly rather than deploying a stale tree.
+            git fetch --quiet origin main
+            git reset --hard origin/main
+
+            # .env lives only on the server and is never in the repo, so a reset
+            # cannot clobber it — but check, because deploying without it would
+            # take the service down.
+            if [[ ! -f .env ]]; then
+              echo "::error::.env missing on the server. Recreate it from .env.prod.example."
+              exit 1
+            fi
+
+            bash deploy/deploy.sh
+
+      - name: Verify from outside the box
+        # The deploy script checks health from localhost. This proves the public path
+        # — DNS, TLS, nginx, the container — is actually serving.
+        run: |
+          set -euo pipefail
+          host="${{ secrets.SERVICE_HOST }}"
+
+          echo "checking https://$host/livez"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS --max-time 10 "https://$host/livez" >/dev/null; then
+              echo "  alive"
+              break
+            fi
+            [[ $attempt -eq 5 ]] && { echo "::error::/livez unreachable after 5 tries"; exit 1; }
+            sleep 5
+          done
+
+          echo "checking auth is enforced"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -X POST "https://$host/search" \
+            -H 'Content-Type: application/json' \
+            -d '{"query":"post deploy check"}')
+          if [[ "$code" != "401" ]]; then
+            echo "::error::unauthenticated request returned $code, expected 401. The service may be open."
+            exit 1
+          fi
+          echo "  auth enforced"

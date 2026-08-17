@@ -1,0 +1,32 @@
+# Horizontal-scaling overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale api=3
+#
+# The base compose file publishes a fixed host port on `api`, which is right for
+# a single instance but makes `--scale api=N` fail outright: only one container
+# can bind 127.0.0.1:8000, and the rest die with "port is already allocated".
+#
+# This overlay removes that mapping and puts nginx in front. Compose's embedded
+# DNS resolves `api` to every replica's address, so nginx round-robins across
+# them with no service registry and no config regeneration when N changes.
+
+services:
+  api:
+    # Replaces the base file's published port. Replicas are reachable only
+    # through the proxy, on the internal network.
+    ports: !override []
+
+  lb:
+    image: docker.io/nginx:1.27-alpine
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

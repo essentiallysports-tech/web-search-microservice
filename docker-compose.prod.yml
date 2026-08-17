@@ -1,0 +1,46 @@
+# Production overlay. Always pass it explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# NEVER combine this with docker-compose.dev.yml. That overlay publishes Redis on
+# the host, and Redis here has no password — exposing it on a public instance
+# hands anyone your cache, your rate-limit counters, AND your API tokens.
+
+services:
+  api:
+    # Loopback only. nginx on the host terminates TLS and proxies here, so this
+    # port must not be reachable from outside the box. The container also runs
+    # uvicorn with `--forwarded-allow-ips "*"`, which is only safe BECAUSE nothing
+    # but nginx can reach it — publishing this port publicly would let a caller
+    # forge X-Forwarded-For.
+    ports: !override
+      - "127.0.0.1:8000:8000"
+    deploy:
+      resources:
+        limits:
+          # Sized to fit a 4GB instance alongside Redis, not to be generous.
+          #
+          # The base file's 4g was set when Chromium could take ~1GB per browser
+          # context. That tier is gone, and measured usage is 97MB idle / 622MB
+          # under load. On a 4GB box, 4g + Redis's 1200m over-commits by 1.2GB —
+          # the container limit never fires and the HOST OOMs instead, so the
+          # kernel kills whichever process it likes rather than the one at fault.
+          #
+          # 2g leaves real headroom above the measured peak while keeping the
+          # failure contained. On an 8GB instance you can raise this to 4g.
+          memory: 2g
+        reservations:
+          memory: 512m
+    # Docker restarts the container; this makes the box bring the stack up after a
+    # reboot without a systemd unit of its own.
+    restart: always
+
+  redis:
+    # maxmemory (1gb) is what actually bounds Redis; this limit is the hard stop if
+    # fragmentation or a bad key pattern pushes past it. Keep it above maxmemory or
+    # the container dies before the eviction policy gets a chance to work.
+    deploy:
+      resources:
+        limits:
+          memory: 1200m
+    restart: always

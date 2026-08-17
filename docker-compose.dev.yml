@@ -1,0 +1,15 @@
+# Local-development overlay. Applied explicitly, never automatically:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# It exposes Redis on loopback so the API can be run straight from a virtualenv
+# against the containerized cache. The base compose file keeps it on the internal
+# network only.
+#
+# Redis is the only local dependency left — search is now two external APIs, so
+# there is nothing else to bring up.
+
+services:
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

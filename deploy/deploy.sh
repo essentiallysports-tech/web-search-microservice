@@ -8,6 +8,19 @@
 # Refuses to start on a configuration that is wrong in a way we can detect here, then
 # gates on a real health check rather than assuming the container came up.
 # Run bootstrap.sh once before the first deploy.
+#
+# SCOPE: this deploys the CONTAINERS only. It does not touch host nginx.
+#
+# So a change to deploy/nginx-site.conf or deploy/nginx-limits.conf will NOT take
+# effect from a deploy — only bootstrap.sh installs those. After editing either,
+# apply it by hand:
+#
+#   sudo sed "s/SERVICE_HOST/<your-host>/g" deploy/nginx-site.conf > /etc/nginx/sites-available/search
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Kept separate on purpose: a bad nginx config takes the whole host offline, whereas a
+# bad container is contained and rolls back by redeploying. Reloading nginx on every
+# routine deploy would widen the blast radius of an ordinary code change.
 
 set -euo pipefail
 

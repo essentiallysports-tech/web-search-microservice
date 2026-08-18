@@ -17,6 +17,7 @@ from app.api.deps import (
     SettingsDep,
     get_llm_provider,
     resolve_count,
+    resolve_exclude,
     resolve_max_tier,
 )
 from app.logging_setup import get_logger, request_id_ctx
@@ -65,6 +66,7 @@ async def research(
             extract_top_k=payload.extract_top_k,
             max_tier=resolve_max_tier(payload.max_tier, settings),
             bypass_cache=payload.bypass_cache,
+            exclude=resolve_exclude(payload.exclude_domains),
         )
     except AllProvidersFailedError as exc:
         raise HTTPException(

@@ -13,6 +13,7 @@ from fastapi import Depends, Request
 from app.config import Settings
 from app.models import ExtractorName
 from app.rerank.base import LLMProvider
+from app.search.domains import parse_domains
 from app.services.extract_service import ExtractService
 from app.services.pipeline import SearchExtractPipeline
 from app.services.search_service import SearchService
@@ -48,6 +49,17 @@ def resolve_count(requested: int | None, settings: Settings) -> int:
     """None means the caller didn't ask, so DEFAULT_RESULT_COUNT applies.
     MAX_RESULT_COUNT is the hard ceiling either way."""
     return min(requested or settings.default_result_count, settings.max_result_count)
+
+
+def resolve_exclude(requested: list[str] | None) -> frozenset[str] | None:
+    """Normalize the caller's `exclude_domains` for the service layer.
+
+    None stays None so SEARCH_BLOCKED_DOMAINS applies; an explicit empty list
+    becomes an empty set, which the service honours as "filtering off".
+    """
+    if requested is None:
+        return None
+    return parse_domains(",".join(requested))
 
 
 def resolve_max_tier(requested: ExtractorName | None, settings: Settings) -> ExtractorName:

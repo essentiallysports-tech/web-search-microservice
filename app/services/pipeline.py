@@ -69,6 +69,8 @@ class SearchExtractPipeline:
         max_tier: ExtractorName = ExtractorName.FIRECRAWL,
         bypass_cache: bool = False,
         deadline_s: float | None = None,
+        #: None means SEARCH_BLOCKED_DOMAINS; an empty set disables filtering.
+        exclude: frozenset[str] | None = None,
     ) -> PipelineOutcome:
         started = time.perf_counter()
 
@@ -78,6 +80,7 @@ class SearchExtractPipeline:
             lang=lang,
             freshness=freshness,
             bypass_cache=bypass_cache,
+            exclude=exclude,
         )
 
         # `not_attempted` up front, overwritten per result once extraction runs.
@@ -88,7 +91,11 @@ class SearchExtractPipeline:
         # early returns below, where nothing is extracted at all.
         items = [
             ResultItem(
-                title=r.title, url=r.url, snippet=r.snippet, status="not_attempted"
+                title=r.title,
+                url=r.url,
+                snippet=r.snippet,
+                status="not_attempted",
+                published_at=r.published_at,
             )
             for r in outcome.results
         ]

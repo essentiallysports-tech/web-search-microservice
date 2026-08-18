@@ -15,6 +15,7 @@ teams **consuming** the service. For how it is built and operated, see `README.m
 - [`POST /search_and_extract`](#post-search_and_extract)
 - [`POST /extract`](#post-extract)
 - [`POST /research`](#post-research)
+- [Domain filtering](#domain-filtering)
 - [Result statuses](#result-statuses)
 - [Errors](#errors)
 - [Rate limits](#rate-limits)
@@ -132,6 +133,7 @@ to depend on one exactly; otherwise send the field explicitly.
 | `lang` | string | `"en"` | Language hint, max 8 chars. |
 | `freshness` | enum | `"any"` | `any` · `day` · `week` · `month` · `year`. |
 | `bypass_cache` | bool | `false` | **Costs money every time.** See [caching](#caching). |
+| `exclude_domains` | array | deployment default | Hosts to drop, subdomains included. Omit to use the server's `SEARCH_BLOCKED_DOMAINS`; send `[]` to disable filtering. See [domain filtering](#domain-filtering). |
 
 ### Response
 
@@ -155,6 +157,7 @@ Each result:
 | `extractor_used` | null | Always null here. |
 | `status` | string | Always `"ok"`; there is no extraction to report. |
 | `from_cache` | bool | Whether the result set came from cache. |
+| `published_at` | string \| null | ISO-8601 UTC, e.g. `2026-08-17T15:25:28Z`. `null` when the source reported nothing usable — never a guess, so it is safe to gate on. |
 
 ### Example
 
@@ -325,6 +328,72 @@ means the model could not ground it — treat that as a weak answer.
 
 `422` if results were found but none could be extracted — there was nothing to reason
 over. Retry with a higher `extract_top_k`, or fall back to `/search`.
+
+---
+
+## Domain filtering
+
+Search results are filtered against a block list before they reach you. The
+shipped default removes hosts this service cannot do anything useful with:
+
+```
+youtube.com  youtu.be  instagram.com  facebook.com  reddit.com  x.com
+twitter.com  tiktok.com  pinterest.com  threads.net  threads.com  snapchat.com
+```
+
+This is not an editorial preference. It is what those hosts measurably return
+when extracted:
+
+| Host | Result |
+|---|---|
+| `reddit.com`, `facebook.com` | robots-disallowed — 0 characters |
+| `instagram.com` | JS shell, caption only — 145–491 characters |
+| `youtube.com` | page furniture, not prose — 3k–106k characters of navigation |
+
+The last row is the one to care about. A `/search_and_extract` result from a
+YouTube watch page arrives with 21,000 characters of `markdown` and `status:
+"ok"`, none of it the story. If you are verifying a claim against that text, a
+wall of loosely related entity names is the input most likely to make an
+unrelated claim look supported.
+
+**Measured effect.** On `Lakers Luka Doncic trade latest`, count=5:
+
+| | Usable results (≥400 chars of prose) | Paid extractions | Latency |
+|---|---|---|---|
+| Filtering off | 2 / 5 | 3 | 17.5s |
+| Filtering on | 5 / 5 | 0 | 6.1s |
+
+Quality and cost move together here: the paid extractions were being spent on
+video pages that returned nothing worth having.
+
+### Controlling it
+
+| You want | Send |
+|---|---|
+| The deployment's list (recommended) | omit `exclude_domains` |
+| No filtering at all | `"exclude_domains": []` |
+| Your own list instead | `"exclude_domains": ["example.com", "spam.net"]` |
+
+A caller-supplied list **replaces** the default rather than adding to it, so
+send the full set you want. Matching covers subdomains: `youtube.com` also
+blocks `m.youtube.com`. Max 50 entries.
+
+Operators set the default with `SEARCH_BLOCKED_DOMAINS` (CSV; empty string
+disables it).
+
+### Two mechanics worth knowing
+
+**A `site:` query is left alone.** If your query already carries a positive
+`site:` restriction — `site:essentiallysports.com NBA` — exclusions cannot
+change the outcome, so none are added.
+
+**Filtering does not cost you results.** On Serper the block list is pushed into
+the query as Google `-site:` operators, so excluded hosts never occupy a slot
+and the results behind them move up: ask for 5, get 5. The post-filter behind
+that is a backstop for what the operators miss.
+
+`wss_search_domains_filtered_total` counts what the backstop caught. A flat zero
+is normal and healthy — it means the operators are doing the work.
 
 ---
 

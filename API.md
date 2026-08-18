@@ -30,7 +30,7 @@ teams **consuming** the service. For how it is built and operated, see `README.m
 ## Quick start
 
 ```bash
-curl -X POST https://YOUR-HOST/search \
+curl -X POST https://essentially-search.duckdns.org/search \
   -H "X-API-Key: esw_EXAMPLE_TOKEN_REPLACE_WITH_YOUR_OWN" \
   -H "Content-Type: application/json" \
   -d '{"query": "best CRM 2026", "count": 5}'
@@ -155,7 +155,7 @@ Each result:
 ### Example
 
 ```bash
-curl -X POST https://YOUR-HOST/search \
+curl -X POST https://essentially-search.duckdns.org/search \
   -H "X-API-Key: $SEARCH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query": "redis persistence options", "count": 10, "freshness": "year"}'
@@ -192,7 +192,7 @@ Results now carry `markdown`, `extractor_used`, and a meaningful `status`.
 ### Example
 
 ```bash
-curl -X POST https://YOUR-HOST/search_and_extract \
+curl -X POST https://essentially-search.duckdns.org/search_and_extract \
   -H "X-API-Key: $SEARCH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query": "what is a CDN", "count": 5, "extract_top_k": 3}'
@@ -259,7 +259,7 @@ of slow pages can take most of that.
 ### Example
 
 ```bash
-curl -X POST https://YOUR-HOST/extract \
+curl -X POST https://essentially-search.duckdns.org/extract \
   -H "X-API-Key: $SEARCH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"urls": ["https://en.wikipedia.org/wiki/Redis"], "max_tier": "http_retry"}'
@@ -296,7 +296,7 @@ Everything from `/search`, plus:
 ### Example
 
 ```bash
-curl -X POST https://YOUR-HOST/research \
+curl -X POST https://essentially-search.duckdns.org/research \
   -H "X-API-Key: $SEARCH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query": "what is Redis used for", "count": 5, "extract_top_k": 3,

@@ -16,6 +16,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models import ExtractorName
+from app.search.domains import DEFAULT_BLOCKED_DOMAINS, parse_domains
 
 
 def _csv(raw: str) -> list[str]:
@@ -63,6 +64,24 @@ class Settings(BaseSettings):
 
     brave_api_key: str = ""  # blank disables the fallback entirely
     brave_endpoint: str = "https://api.search.brave.com/res/v1/web/search"
+
+    # Hosts dropped from every result set. Raw CSV for the same reason as
+    # SERVICE_API_KEYS — a `list[str]` field would make pydantic-settings
+    # JSON-parse it, breaking the documented `a.com,b.com` form.
+    #
+    # Non-empty by default, which is unusual for a filter and deliberate: the
+    # shipped list is the set of hosts the extractor provably cannot read
+    # (robots-disallowed, or a JS shell that yields page furniture instead of
+    # prose), so leaving them in costs a result slot and sometimes a PAID
+    # extraction to return nothing usable. See search/domains.py for the
+    # measurements. Set to an empty string to disable filtering entirely.
+    search_blocked_domains_raw: str = Field(
+        ",".join(DEFAULT_BLOCKED_DOMAINS), validation_alias="SEARCH_BLOCKED_DOMAINS"
+    )
+
+    @property
+    def search_blocked_domains(self) -> frozenset[str]:
+        return parse_domains(self.search_blocked_domains_raw)
 
     # Serper charges one credit up to a depth of 10 and two above it, so 10 is the
     # natural default — asking for fewer costs the same. A test pins this below the

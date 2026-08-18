@@ -118,14 +118,24 @@ def search_key(
     freshness: str,
     version: str = "v1",
     aggressive: bool = True,
+    exclude: str = "",
 ) -> str:
     """Key for a search result set.
 
     `count` is part of the key because a cached 5-result set cannot serve a 20-result
     request. For maximum reuse, request a consistent count and slice locally.
+
+    `exclude` is the caller's domain block list (see search/domains.key_material).
+    It belongs in the key because it changes which results come back: serving a
+    filtered set to an unfiltered request would silently withhold results the
+    caller asked for, and the reverse would return hosts they excluded.
     """
     q = canonical_query(query) if aggressive else normalize_query(query)
     payload = f"{q}|{count}|{lang.lower()}|{freshness.lower()}"
+    if exclude:
+        # Appended only when non-empty, so existing unfiltered keys keep their
+        # shape and a deployment that turns filtering off does not cold-start.
+        payload = f"{payload}|x={exclude}"
     return f"wss:{version}:search:{_digest(payload)}"
 
 

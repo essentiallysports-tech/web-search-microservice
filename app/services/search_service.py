@@ -25,6 +25,7 @@ from app.config import Settings
 from app.logging_setup import get_logger
 from app.models import CacheState, Freshness, SearchProviderName, SearchResult
 from app.search.base import SearchProvider, SearchProviderError
+from app.search.domains import key_material
 
 log = get_logger(__name__)
 
@@ -111,11 +112,14 @@ class SearchService:
         lang: str = "en",
         freshness: Freshness = Freshness.ANY,
         bypass_cache: bool = False,
+        exclude: frozenset[str] | None = None,
     ) -> SearchOutcome:
         """Cached search. A cache hit costs nothing and touches no provider."""
+        blocked = self._resolve_exclude(exclude)
+
         if self.cache is None or not self.cache.enabled:
             outcome = await self.search_uncached(
-                query, count=count, lang=lang, freshness=freshness
+                query, count=count, lang=lang, freshness=freshness, exclude=blocked
             )
             outcome.cache = CacheState.BYPASS
             return outcome
@@ -127,11 +131,12 @@ class SearchService:
             freshness=str(freshness),
             version=self.settings.cache_version,
             aggressive=self.settings.cache_aggressive_query_key,
+            exclude=key_material(blocked),
         )
 
         async def compute() -> dict[str, Any]:
             outcome = await self.search_uncached(
-                query, count=count, lang=lang, freshness=freshness
+                query, count=count, lang=lang, freshness=freshness, exclude=blocked
             )
             return outcome.to_envelope()
 
@@ -146,6 +151,18 @@ class SearchService:
         outcome = SearchOutcome.from_envelope(envelope)
         outcome.cache = state
         return outcome
+
+    def _resolve_exclude(self, requested: frozenset[str] | None) -> frozenset[str]:
+        """Deployment policy unless the caller stated one.
+
+        None means "caller said nothing", so SEARCH_BLOCKED_DOMAINS applies. An
+        EMPTY set is a statement — filtering off — and is honoured. Collapsing the
+        two would make the setting either unoverridable or inert depending on which
+        way it fell.
+        """
+        if requested is None:
+            return self.settings.search_blocked_domains
+        return requested
 
     def _ttl_for(self, envelope: dict[str, Any], freshness: Freshness) -> int:
         """TTL by content class.
@@ -167,8 +184,10 @@ class SearchService:
         count: int,
         lang: str = "en",
         freshness: Freshness = Freshness.ANY,
+        exclude: frozenset[str] | None = None,
     ) -> SearchOutcome:
         """Provider chain with fallback. No caching, no coalescing."""
+        blocked = self._resolve_exclude(exclude)
         attempted: list[str] = []
         rescue: SearchOutcome | None = None
         last = len(self.providers) - 1
@@ -187,7 +206,7 @@ class SearchService:
 
             try:
                 results = await provider.search(
-                    query, count=count, lang=lang, freshness=freshness
+                    query, count=count, lang=lang, freshness=freshness, exclude=blocked
                 )
             except CircuitOpenError:
                 attempted.append(f"{label}: circuit open")

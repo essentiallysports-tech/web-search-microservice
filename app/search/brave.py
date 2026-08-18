@@ -23,6 +23,7 @@ from app.config import Settings
 from app.logging_setup import get_logger
 from app.models import Freshness, SearchProviderName, SearchResult
 from app.search.base import SearchProvider, SearchProviderError
+from app.search.dates import to_iso8601
 
 log = get_logger(__name__)
 
@@ -48,6 +49,14 @@ class BraveProvider(SearchProvider):
     def enabled(self) -> bool:
         # No key means the fallback does not exist — pure-free mode.
         return bool(self.settings.brave_api_key)
+
+    def overfetch(self, count: int) -> int:
+        """Brave has no `-site:` operator, so exclusion here is post-hoc only and
+        the dropped slots cannot be backfilled by the index. Over-fetching is the
+        whole remedy — and it is free, because Brave bills per CALL rather than by
+        depth. `prepare_query` is deliberately left as the no-op default.
+        """
+        return min(count * 2, _MAX_COUNT)
 
     async def _search(
         self,
@@ -152,7 +161,9 @@ class BraveProvider(SearchProvider):
                     engine="brave",
                     # No relevance score is exposed; None beats inventing one.
                     score=None,
-                    published_at=item.get("page_age") or item.get("age") or None,
+                    # `page_age` is ISO, `age` is prose ("2 days ago"). Both leave
+                    # here as ISO so the field means one thing across providers.
+                    published_at=to_iso8601(item.get("page_age") or item.get("age")),
                 )
             )
         return results

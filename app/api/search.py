@@ -16,6 +16,7 @@ from app.api.deps import (
     SearchServiceDep,
     SettingsDep,
     resolve_count,
+    resolve_exclude,
     resolve_max_tier,
 )
 from app.logging_setup import get_logger, request_id_ctx
@@ -56,6 +57,7 @@ async def search(
             lang=payload.lang,
             freshness=payload.freshness,
             bypass_cache=payload.bypass_cache,
+            exclude=resolve_exclude(payload.exclude_domains),
         )
     except AllProvidersFailedError as exc:
         log.error("search.all_providers_failed", query=payload.query, attempts=exc.attempts)
@@ -79,7 +81,13 @@ async def search(
     return SearchResponse(
         query=payload.query,
         results=[
-            ResultItem(title=r.title, url=r.url, snippet=r.snippet, from_cache=from_cache)
+            ResultItem(
+                title=r.title,
+                url=r.url,
+                snippet=r.snippet,
+                from_cache=from_cache,
+                published_at=r.published_at,
+            )
             for r in outcome.results
         ],
         provider=outcome.provider,
@@ -113,6 +121,7 @@ async def search_and_extract(
             max_tier=resolve_max_tier(payload.max_tier, settings),
             bypass_cache=payload.bypass_cache,
             deadline_s=payload.extract_deadline_s,
+            exclude=resolve_exclude(payload.exclude_domains),
         )
     except AllProvidersFailedError as exc:
         log.error(

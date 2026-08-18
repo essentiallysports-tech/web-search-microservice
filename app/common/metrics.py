@@ -45,6 +45,16 @@ search_credits_used = Counter(
     ["provider"],
 )
 
+# Results dropped by SEARCH_BLOCKED_DOMAINS. Two readings, both worth alerting on:
+# a flat zero means the block list is inert (a typo in the CSV looks exactly like
+# this), and a number approaching the requested count means the filter is eating
+# the result set rather than trimming it — the query needs widening, not the list.
+search_domains_filtered = Counter(
+    "wss_search_domains_filtered_total",
+    "Search results dropped because their host is excluded.",
+    ["provider"],
+)
+
 search_results_returned = Histogram(
     "wss_search_results_returned",
     "How many results a provider actually returned.",

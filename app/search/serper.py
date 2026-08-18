@@ -31,6 +31,8 @@ from app.config import Settings
 from app.logging_setup import get_logger
 from app.models import Freshness, SearchProviderName, SearchResult
 from app.search.base import SearchProvider, SearchProviderError
+from app.search.dates import to_iso8601
+from app.search.domains import with_exclusions
 
 log = get_logger(__name__)
 
@@ -60,6 +62,38 @@ class SerperProvider(SearchProvider):
         # No key means no search at all now this is the primary; startup validation
         # catches it rather than booting a service that 502s every request.
         return bool(self.settings.serper_api_key)
+
+    # ------------------------------------------------------ exclusion hooks
+
+    def prepare_query(self, query: str, exclude: frozenset[str]) -> str:
+        """Google's own `-site:` operators.
+
+        Worth the override: filtering at the index means an excluded host never
+        occupies a result slot, so the results behind it move up and a request
+        for 5 still yields 5. The base class post-filter still runs behind this —
+        the operator list is capped, and Google honours it approximately.
+        """
+        return with_exclusions(query, exclude)
+
+    def overfetch(self, count: int) -> int:
+        """Head-room for the post-filter, but never a second credit.
+
+        Serper prices by depth BRACKET rather than per result, so widening a
+        request for 5 up to 10 is free — while widening 10 to 20 would double the
+        bill on what happens to be DEFAULT_RESULT_COUNT. So head-room is taken
+        only where it costs nothing: up to the boundary from below, and doubled
+        when already past it (there is no further boundary to cross).
+
+        At exactly MAX_FREE_DEPTH there is no free head-room, and `prepare_query`
+        is what keeps the set full. A rare under-return there is the right trade
+        against doubling the cost of the default request.
+        """
+        num = min(count, _MAX_COUNT)
+        if num < MAX_FREE_DEPTH:
+            return MAX_FREE_DEPTH
+        if num == MAX_FREE_DEPTH:
+            return num
+        return min(num * 2, _MAX_COUNT)
 
     async def _search(
         self,
@@ -170,7 +204,9 @@ class SerperProvider(SearchProvider):
                     # `position` is a rank, not a score; converting would invent
                     # precision. The list is already in rank order.
                     score=None,
-                    published_at=item.get("date") or None,
+                    # Google reports age as prose ("15 hours ago"); consumers gate
+                    # on recency and cannot use that. Normalized at the boundary.
+                    published_at=to_iso8601(item.get("date")),
                 )
             )
         return results

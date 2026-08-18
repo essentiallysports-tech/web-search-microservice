@@ -11,7 +11,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
-
 # --------------------------------------------------------------------- enums
 
 
@@ -105,6 +104,13 @@ class SearchRequest(BaseModel):
     lang: Annotated[str, Field(max_length=8)] = "en"
     freshness: Freshness = Freshness.ANY
     bypass_cache: bool = False
+    # Hosts to drop from the result set, subdomains included.
+    #
+    # Omitted means SEARCH_BLOCKED_DOMAINS, so the deployment sets the policy
+    # rather than every caller remembering to. An explicit empty list means "no
+    # filtering at all" — unset and empty stay distinguishable, the same way
+    # `extract_top_k` separates them.
+    exclude_domains: Annotated[list[str], Field(max_length=50)] | None = None
 
     @field_validator("query")
     @classmethod
@@ -171,6 +177,15 @@ class ResultItem(BaseModel):
     #: On `/search` there is no extraction to report and this stays "ok".
     status: str = "ok"
     from_cache: bool = False
+    #: When the source says it published, as ISO-8601 UTC — or None when it said
+    #: nothing usable. Providers report age in prose ("15 hours ago"), so this is
+    #: normalized at the provider boundary; see `app/search/dates.py`.
+    #:
+    #: Carried through because recency gating is a caller concern this service is
+    #: uniquely placed to answer: the date arrives with the search result and is
+    #: unrecoverable afterwards without re-fetching every page. Always None on
+    #: `/extract`, which has no search result behind it.
+    published_at: str | None = None
 
 
 class SearchResponse(BaseModel):

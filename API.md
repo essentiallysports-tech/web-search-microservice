@@ -67,7 +67,11 @@ Every request needs an `X-API-Key` header:
 X-API-Key: esw_EXAMPLE_TOKEN_REPLACE_WITH_YOUR_OWN
 ```
 
-Get a token from the admin panel. Notes that matter:
+**To get one**, ask the service owner (rajat@essentiallysports.com) for a token, and say
+which app it is for — tokens are issued per-app, not per-person. You will be sent the
+secret once.
+
+Notes that matter:
 
 - **One token per app.** Each gets its own rate-limit budget, so another team's runaway
   loop cannot throttle you, and your token can be revoked without touching anyone else.

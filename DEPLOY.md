@@ -396,6 +396,67 @@ matters.
 
 ---
 
+## Part 4 — Issuing tokens to consuming apps
+
+Day-to-day operation once deployed. `API.md` covers the consumer side; this is yours.
+
+### Onboarding an app
+
+1. Open the admin panel and sign in with a key from `SERVICE_API_KEYS`
+2. Create a token named after the app (`blog-app`, not `rajat`), with an expiry if the
+   integration is temporary
+3. Send the secret **once**, through a password manager or a 1Password link — not Slack,
+   not email
+4. Send them `API.md` or the shared reference page
+
+**One token per app, always.** Each identity gets its own 120-units/minute budget, so a
+runaway loop in one app cannot throttle another, and you can revoke one without
+disturbing the rest. A shared token gives up both properties.
+
+Name tokens after the app rather than the person — the name is what you read in six
+months when deciding whether something is still in use, and people change teams.
+
+### Without the panel
+
+```bash
+curl -X POST https://essentially-search.duckdns.org/admin/tokens   -H "X-API-Key: $ADMIN_KEY" -H 'Content-Type: application/json'   -d '{"name":"blog-app","expires_in_days":90}'
+```
+
+```bash
+curl -s https://essentially-search.duckdns.org/admin/tokens   -H "X-API-Key: $ADMIN_KEY" | python3 -m json.tool
+```
+
+```bash
+curl -X DELETE https://essentially-search.duckdns.org/admin/tokens/TOKEN_ID   -H "X-API-Key: $ADMIN_KEY"
+```
+
+`/admin/*` accepts **static keys from `SERVICE_API_KEYS` only**. An issued token gets a
+`403` there, so a leaked consumer token cannot mint more.
+
+### When a secret is lost or leaked
+
+Revoke and reissue. There is no recovery path — only a hash is stored, which is the
+point: a dumped Redis yields no working credentials. Revocation takes effect on the next
+request.
+
+### Rotating an admin key
+
+Admin keys live in `.env`, not Redis, so this one needs a restart:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Replace `SERVICE_API_KEYS` in `.env`, then:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml   -f docker-compose.t3small.yml up -d --force-recreate api
+```
+
+Issued tokens are unaffected — they live in Redis and survive the restart.
+
+---
+
 ## Scaling on one box
 
 At 4 vCPU or more, run multiple API workers. `WEB_CONCURRENCY=1` per container is

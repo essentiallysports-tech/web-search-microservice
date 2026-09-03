@@ -11,6 +11,7 @@ import abc
 
 from pydantic import BaseModel
 
+from app.common.budget import Budget
 from app.config import Settings
 from app.models import ResultItem
 
@@ -27,8 +28,9 @@ class LLMProvider(abc.ABC):
     name: str
     billable: bool = True
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, budget: Budget | None = None) -> None:
         self.settings = settings
+        self.budget = budget
 
     @property
     def enabled(self) -> bool:

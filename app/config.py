@@ -65,6 +65,19 @@ class Settings(BaseSettings):
     brave_api_key: str = ""  # blank disables the fallback entirely
     brave_endpoint: str = "https://api.search.brave.com/res/v1/web/search"
 
+    # Dedicated flat-rate resellers, not Apify. Chosen deliberately over Apify's
+    # actor marketplace: Apify's real production bill ran far past its own
+    # advertised per-item price once platform/compute/storage overhead was
+    # counted (observed: ~$1,000/mo for existing unrelated usage against a
+    # headline of a few dollars per 1k items) — the same trap this file's
+    # COST-marked settings elsewhere exist to avoid. Both of these are flat
+    # pay-per-call with no subscription and no platform-rental fee, which is
+    # the property that actually matters here, not just the sticker price.
+    twitterapi_api_key: str = ""  # blank disables Twitter search entirely
+    twitterapi_endpoint: str = "https://api.twitterapi.io/twitter/tweet/advanced_search"
+    redditapis_api_key: str = ""  # blank disables Reddit search entirely
+    redditapis_endpoint: str = "https://api.redditapis.com/api/reddit/search"
+
     # Hosts dropped from every result set. Raw CSV for the same reason as
     # SERVICE_API_KEYS — a `list[str]` field would make pydantic-settings
     # JSON-parse it, breaking the documented `a.com,b.com` form.
@@ -234,6 +247,25 @@ class Settings(BaseSettings):
     # Search is unaffected either way: both providers authenticate our key, so they
     # have no reason to block us and nothing is gained by proxying them.
     proxy_for_extraction: bool = True
+
+    # ------------------------------------------------------------------ budget
+    # Real-dollar spend ceiling — see app/common/budget.py for the full reasoning
+    # (fails CLOSED, deliberately, unlike everything else in this file). 0 disables
+    # a given window.
+    #
+    # $30/day is HALF of a $50/day total target for "the Threads routine" end to
+    # end — the other $20/day is the sibling es-mcp project's own daily cap for
+    # its Threads-specific service bucket (MCP_SERVICE_DAILY_BUDGET_USD there).
+    # $20 (Athena/S3) + $30 (this service: search, extraction, Twitter, Reddit)
+    # = $50/day, enforced by two independent budgets in two different services.
+    #
+    # This is server-wide, not per-caller, because Threads is currently the only
+    # real consumer of this service — there is no second caller to isolate a
+    # sub-budget from yet. If that changes, key this off the authenticated caller
+    # identity (security.py already resolves one per request) rather than raising
+    # this number to cover a second consumer's traffic under the same ceiling.
+    budget_daily_usd: float = 30.0
+    budget_monthly_usd: float = 700.0  # ~30 * 23 operating days; adjust once real traffic lands
 
     # ---------------------------------------------------------------- llm layer
     enable_llm_layer: bool = False

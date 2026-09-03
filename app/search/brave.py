@@ -19,6 +19,7 @@ import httpx
 import orjson
 
 from app.cache.keys import canonical_url
+from app.common.budget import Budget
 from app.config import Settings
 from app.logging_setup import get_logger
 from app.models import Freshness, SearchProviderName, SearchResult
@@ -41,9 +42,20 @@ _MAX_COUNT = 20  # API hard limit
 class BraveProvider(SearchProvider):
     name = SearchProviderName.BRAVE
     billable = True
+    # No self-reported per-call figure like Serper's `credits`, so this is a flat
+    # list-price estimate from this module's own docstring (~$5/1k).
+    _FLAT_COST_USD = 0.005
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        super().__init__(settings, client)
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        budget: Budget | None = None,
+    ) -> None:
+        super().__init__(settings, client, budget)
+
+    def estimate_cost_usd(self, results: list[SearchResult]) -> float:
+        return self._FLAT_COST_USD
 
     @property
     def enabled(self) -> bool:

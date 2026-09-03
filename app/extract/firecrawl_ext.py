@@ -16,6 +16,7 @@ from __future__ import annotations
 import httpx
 import orjson
 
+from app.common.budget import Budget
 from app.config import Settings
 from app.extract.base import ExtractProvider
 from app.logging_setup import get_logger
@@ -36,9 +37,17 @@ _TRANSPORT_MARGIN_S = 2.0
 class FirecrawlExtractor(ExtractProvider):
     name = ExtractorName.FIRECRAWL
     billable = True
+    # The measured figure from this module's own docstring — see PROGRESS.md's
+    # "Total cost / 1k: $0.41" breakdown for how it was derived.
+    estimated_cost_usd = 0.00083
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        super().__init__(settings, client)
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        budget: Budget | None = None,
+    ) -> None:
+        super().__init__(settings, client, budget)
 
     @property
     def enabled(self) -> bool:

@@ -21,6 +21,7 @@ import re
 
 import orjson
 
+from app.common.budget import Budget, BudgetExceededError, BudgetUnavailableError
 from app.common.metrics import llm_tokens
 from app.config import Settings
 from app.logging_setup import get_logger
@@ -32,6 +33,26 @@ log = get_logger(__name__)
 
 class LLMUnavailableError(RuntimeError):
     """The layer is disabled or misconfigured — a 503, not a 500."""
+
+
+# $ per token, input/output. Public list pricing as of this file's writing (Sept
+# 2026) — verify against https://www.anthropic.com/pricing before trusting this
+# for a model not listed; an unrecognized model id falls back to the Sonnet
+# rate (the more expensive of the two) so a config change to a pricier model
+# never silently under-charges the budget.
+_PRICE_PER_TOKEN_USD: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5": (1.00 / 1_000_000, 5.00 / 1_000_000),
+    "claude-sonnet-4-5": (3.00 / 1_000_000, 15.00 / 1_000_000),
+    "claude-opus-4-5": (15.00 / 1_000_000, 75.00 / 1_000_000),
+}
+_DEFAULT_PRICE_PER_TOKEN_USD = _PRICE_PER_TOKEN_USD["claude-sonnet-4-5"]
+
+
+def _price_for(model: str) -> tuple[float, float]:
+    for prefix, price in _PRICE_PER_TOKEN_USD.items():
+        if model.startswith(prefix):
+            return price
+    return _DEFAULT_PRICE_PER_TOKEN_USD
 
 
 _SYSTEM = (
@@ -129,8 +150,8 @@ class AnthropicLLMProvider(LLMProvider):
     name = "anthropic"
     billable = True
 
-    def __init__(self, settings: Settings) -> None:
-        super().__init__(settings)
+    def __init__(self, settings: Settings, budget: Budget | None = None) -> None:
+        super().__init__(settings, budget)
         self._client = None
 
     @property
@@ -173,6 +194,17 @@ class AnthropicLLMProvider(LLMProvider):
         prompt = build_prompt(query, sources, self.settings.llm_max_source_chars)
         system = _SYSTEM if not instruction else f"{_SYSTEM}\n\nAdditional instruction: {instruction}"
 
+        # Checked here, not just at the /research route level: this is the one
+        # place that knows a real API call (not just a search/extract) is about
+        # to happen. Fails closed like every other billable call in this
+        # service — see budget.py's module docstring for why this layer
+        # specifically doesn't get the "everything fails open" treatment.
+        if self.budget is not None:
+            try:
+                await self.budget.check()
+            except (BudgetExceededError, BudgetUnavailableError) as exc:
+                raise LLMUnavailableError(f"budget refused this call: {exc}") from exc
+
         try:
             response = await client.messages.create(
                 model=self.settings.llm_model,
@@ -197,6 +229,11 @@ class AnthropicLLMProvider(LLMProvider):
         usage = response.usage
         llm_tokens.labels(self.settings.llm_model, "input").inc(usage.input_tokens)
         llm_tokens.labels(self.settings.llm_model, "output").inc(usage.output_tokens)
+
+        if self.budget is not None:
+            input_price, output_price = _price_for(self.settings.llm_model)
+            real_cost_usd = usage.input_tokens * input_price + usage.output_tokens * output_price
+            await self.budget.charge(self.name, real_cost_usd)
 
         # Check stop_reason BEFORE reading content: a refusal returns HTTP 200 with an
         # empty content list, so indexing it blind would raise.
@@ -271,8 +308,8 @@ class OllamaLLMProvider(LLMProvider):
     name = "ollama"
     billable = False
 
-    def __init__(self, settings: Settings) -> None:
-        super().__init__(settings)
+    def __init__(self, settings: Settings, budget: Budget | None = None) -> None:
+        super().__init__(settings, budget)
 
     @property
     def enabled(self) -> bool:
@@ -351,14 +388,14 @@ def _count_dropped(raw: object, kept: list[int]) -> int:
     return max(0, len({v for v in raw if isinstance(v, int) and not isinstance(v, bool)}) - len(kept))
 
 
-def build_llm_provider(settings: Settings) -> LLMProvider | None:
+def build_llm_provider(settings: Settings, budget: Budget | None = None) -> LLMProvider | None:
     """The configured provider, or None when the layer is off."""
     if not settings.enable_llm_layer:
         return None
     provider = (
-        AnthropicLLMProvider(settings)
+        AnthropicLLMProvider(settings, budget=budget)
         if settings.llm_provider == "anthropic"
-        else OllamaLLMProvider(settings)
+        else OllamaLLMProvider(settings, budget=budget)
     )
     if not provider.enabled:
         log.warning("llm.provider_unconfigured", provider=settings.llm_provider)

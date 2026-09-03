@@ -31,6 +31,8 @@ class ExtractorName(StrEnum):
 class SearchProviderName(StrEnum):
     SERPER = "serper"
     BRAVE = "brave"
+    TWITTERAPI = "twitterapi"
+    REDDITAPIS = "redditapis"
 
 
 class CacheState(StrEnum):
@@ -111,6 +113,29 @@ class SearchRequest(BaseModel):
     # filtering at all" — unset and empty stay distinguishable, the same way
     # `extract_top_k` separates them.
     exclude_domains: Annotated[list[str], Field(max_length=50)] | None = None
+
+    @field_validator("query")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("query must not be blank")
+        return v
+
+
+class SocialSearchRequest(BaseModel):
+    """Twitter/Reddit search — a distinct capability from `/search`, not a
+    fallback chain member: a caller picks the platform explicitly, there is no
+    "try Twitter, fall back to Reddit" the way Serper falls back to Brave for
+    the same intent. See app/api/social.py."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    platform: Literal["twitter", "reddit"]
+    query: Annotated[str, Field(min_length=1, max_length=500)]
+    count: Annotated[int, Field(ge=1, le=100)] | None = None
+    freshness: Freshness = Freshness.ANY
+    bypass_cache: bool = False
 
     @field_validator("query")
     @classmethod
@@ -220,6 +245,11 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "degraded", "down"]
     providers: dict[str, str]
     version: str
+    #: Spend so far this window per window label ("daily"/"monthly"), in
+    #: dollars, against each cap — the same number `check()`/`charge()`
+    #: enforce, surfaced so a human can see it without reading Prometheus.
+    #: Empty when the budget has no configured caps.
+    budget: dict[str, dict[str, float]] = Field(default_factory=dict)
 
 
 # -------------------------------------------------------------- admin: tokens

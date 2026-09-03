@@ -21,9 +21,11 @@ from app.api import admin as admin_routes
 from app.api import extract as extract_routes
 from app.api import research as research_routes
 from app.api import search as search_routes
+from app.api import social as social_routes
 from app.cache.codec import Codec
 from app.cache.layer import CacheLayer
 from app.cache.redis_cache import RedisCache
+from app.common.budget import Budget
 from app.common.metrics import circuit_state, inflight_requests, request_duration
 from app.common.ratelimit import RateLimiter
 from app.config import Settings, get_settings
@@ -45,7 +47,9 @@ from app.models import HealthResponse
 from app.rerank.llm import build_llm_provider
 from app.search.base import SearchProvider
 from app.search.brave import BraveProvider
+from app.search.reddit_api import RedditApiProvider
 from app.search.serper import SerperProvider
+from app.search.twitter_api import TwitterApiProvider
 from app.services.extract_service import ExtractService
 from app.services.pipeline import SearchExtractPipeline
 from app.services.search_service import SearchService
@@ -56,7 +60,7 @@ log = get_logger(__name__)
 _CIRCUIT_STATE_VALUE = {"closed": 0.0, "half_open": 1.0, "open": 2.0}
 
 
-def build_search_providers(settings: Settings) -> list[SearchProvider]:
+def build_search_providers(settings: Settings, budget: Budget) -> list[SearchProvider]:
     """Providers in fallback order — cheapest first. The ordering IS the cost policy.
 
     Serper is ~$1/1k on Google's index, so it leads on both price and quality. Brave is
@@ -66,13 +70,13 @@ def build_search_providers(settings: Settings) -> list[SearchProvider]:
     Both drop out on their own when unconfigured.
     """
     providers: list[SearchProvider] = [
-        SerperProvider(settings),
-        BraveProvider(settings),
+        SerperProvider(settings, budget=budget),
+        BraveProvider(settings, budget=budget),
     ]
     return [p for p in providers if p.enabled]
 
 
-def build_extractors(settings: Settings) -> list[ExtractProvider]:
+def build_extractors(settings: Settings, budget: Budget) -> list[ExtractProvider]:
     """The tier ladder, cheapest first.
 
     The router sorts and filters this, so ordering here is documentation rather
@@ -82,8 +86,32 @@ def build_extractors(settings: Settings) -> list[ExtractProvider]:
     return [
         TrafilaturaExtractor(settings),
         HttpRetryExtractor(settings),
-        FirecrawlExtractor(settings),
+        FirecrawlExtractor(settings, budget=budget),
     ]
+
+
+async def build_budget(settings: Settings, redis_url: str | None) -> Budget:
+    """The real-dollar spend ceiling — its own Redis client (plain strings, not
+    the cache's zstd-framed binary payloads, so it can't share `RedisCache`'s
+    codec-bound client). None when caching is off, matching that path's own
+    "unreachable Redis must not stop the service booting" posture at startup —
+    but see budget.py's module docstring for why the RUNTIME behavior once
+    booted is the opposite (fails closed, not open)."""
+    if redis_url is None:
+        log.warning("budget.no_redis_configured", note="spend ceiling is inert")
+        return Budget(None, daily_cap_usd=settings.budget_daily_usd, monthly_cap_usd=settings.budget_monthly_usd)
+
+    from redis.asyncio import Redis
+
+    client = Redis.from_url(
+        redis_url, decode_responses=True, socket_timeout=2.0, socket_connect_timeout=2.0
+    )
+    try:
+        await client.ping()
+        log.info("budget.connected", daily_cap_usd=settings.budget_daily_usd, monthly_cap_usd=settings.budget_monthly_usd)
+    except Exception as exc:  # noqa: BLE001 — startup probe, any failure just logs
+        log.warning("budget.redis_unreachable_at_startup", error=repr(exc))
+    return Budget(client, daily_cap_usd=settings.budget_daily_usd, monthly_cap_usd=settings.budget_monthly_usd)
 
 
 async def build_cache(settings: Settings) -> CacheLayer:
@@ -140,6 +168,18 @@ def _validate_startup(settings: Settings) -> None:
         # Serviceable, but every search runs on the ~5x dearer provider. A bill, not an
         # outage, so warn rather than refuse to boot.
         log.warning("startup.no_serper_key_running_on_brave_only")
+    if settings.budget_daily_usd <= 0 and settings.budget_monthly_usd <= 0:
+        # Not refused — an operator may have a reason — but this is the exact
+        # configuration that let the pre-budget incident this file exists to
+        # prevent happen unnoticed, so it gets its own loud line rather than
+        # blending into the general startup log.
+        log.warning("startup.spend_ceiling_disabled", note="no daily or monthly cap configured")
+    if not settings.cache_enabled and (settings.budget_daily_usd > 0 or settings.budget_monthly_usd > 0):
+        # The budget needs Redis to enforce anything; with caching off it has
+        # nowhere to keep a counter and check() will raise BudgetUnavailableError
+        # on every billable call, refusing all of them. Surfaced here rather than
+        # discovered as "why is every search 502ing".
+        log.warning("startup.budget_configured_but_no_redis", note="every billable call will be refused")
 
 
 @asynccontextmanager
@@ -168,8 +208,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Dynamic API tokens live in the same Redis. Static SERVICE_API_KEYS keep working
     # without it, which is why they remain the admin and break-glass path.
     app.state.token_store = TokenStore(cache.redis, version=settings.cache_version)
+
+    # The spend ceiling every billable provider (search, extraction, social) checks
+    # against — see build_budget and app/common/budget.py.
+    budget = await build_budget(settings, settings.redis_url if settings.cache_enabled else None)
+    app.state.budget = budget
+
     app.state.search_service = SearchService(
-        settings, build_search_providers(settings), cache
+        settings, build_search_providers(settings, budget), cache
+    )
+
+    # Twitter/Reddit — separate single-provider services, not fallback-chain
+    # members of the above. None when unconfigured; app/api/social.py 503s
+    # rather than the app failing to boot, matching the Serper/Brave posture
+    # of "missing a key is a bill/coverage decision, not a startup failure"
+    # (this app already refuses to boot with NO search provider at all in
+    # _validate_startup, but Twitter/Reddit are optional capabilities on top,
+    # not the core service).
+    twitter_provider = TwitterApiProvider(settings, budget=budget)
+    app.state.twitter_service = (
+        SearchService(settings, [twitter_provider], cache) if twitter_provider.enabled else None
+    )
+    reddit_provider = RedditApiProvider(settings, budget=budget)
+    app.state.reddit_service = (
+        SearchService(settings, [reddit_provider], cache) if reddit_provider.enabled else None
     )
 
     robots = RobotsPolicy(
@@ -178,7 +240,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         user_agent=settings.user_agent,
         enabled=settings.respect_robots_txt,
     )
-    extract_router = ExtractRouter(settings, build_extractors(settings), robots)
+    extract_router = ExtractRouter(settings, build_extractors(settings, budget), robots)
     # No-op for the shipped tiers — they are all stateless HTTP. Kept because the
     # ExtractProvider contract has the hook and a future tier may need it.
     await extract_router.startup()
@@ -188,8 +250,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings, app.state.search_service, app.state.extract_service
     )
     # None unless explicitly enabled AND configured, so /research 503s rather than
-    # silently costing money.
-    app.state.llm_provider = build_llm_provider(settings)
+    # silently costing money. Budget threaded through same as every other billable
+    # provider — this was the one billable path that could still spend past the
+    # cap; see app/rerank/base.py.
+    app.state.llm_provider = build_llm_provider(settings, budget)
 
     log.info(
         "startup",
@@ -199,6 +263,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         serper=bool(settings.serper_api_key),
         brave=bool(settings.brave_api_key),
         firecrawl=bool(settings.firecrawl_api_key),
+        twitter=twitter_provider.enabled,
+        reddit=reddit_provider.enabled,
+        budget_enabled=budget.enabled,
+        budget_daily_usd=settings.budget_daily_usd,
         llm=settings.enable_llm_layer,
         cache=settings.cache_enabled,
     )
@@ -252,6 +320,7 @@ def create_app() -> FastAPI:
     app.include_router(search_routes.router)
     app.include_router(extract_routes.router)
     app.include_router(research_routes.router)
+    app.include_router(social_routes.router)
     app.include_router(admin_routes.router)
 
     @app.get("/health", response_model=HealthResponse, tags=["ops"])
@@ -284,11 +353,15 @@ def create_app() -> FastAPI:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
         # Extractor health is reported but excluded from `overall` for the same reason
-        # as the cache: /search does not depend on it.
+        # as the cache: /search does not depend on it. Budget status is visibility
+        # only — a full window doesn't change `overall`, since the service is still
+        # correctly up, just correctly refusing new billable work until the window
+        # rolls over.
         return HealthResponse(
             status=overall,
             providers={**report.as_dict(), **extractors},
             version=__version__,
+            budget=await request.app.state.budget.status(),
         )
 
     @app.get("/livez", tags=["ops"], response_class=PlainTextResponse)

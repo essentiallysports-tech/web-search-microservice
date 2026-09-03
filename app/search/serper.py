@@ -26,6 +26,7 @@ import httpx
 import orjson
 
 from app.cache.keys import canonical_url
+from app.common.budget import Budget
 from app.common.metrics import search_credits_used
 from app.config import Settings
 from app.logging_setup import get_logger
@@ -50,12 +51,30 @@ MAX_FREE_DEPTH = 10
 _MAX_COUNT = 100  # API hard limit on `num`
 
 
+#: Serper's own published rate at the entry tier. Only used to convert its
+#: self-reported `credits` figure into dollars for the budget charge — the
+#: credits figure itself is what's authoritative, this is just the units
+#: conversion. See `_record_credits`.
+_USD_PER_CREDIT = 0.001
+
+
 class SerperProvider(SearchProvider):
     name = SearchProviderName.SERPER
     billable = True
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        super().__init__(settings, client)
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        budget: Budget | None = None,
+    ) -> None:
+        super().__init__(settings, client, budget)
+
+    # estimate_cost_usd is deliberately NOT overridden to return a flat figure —
+    # _record_credits below charges the budget directly from Serper's own
+    # reported credit count the moment it's known, which already accounts for
+    # the double-charge on deep result sets. Returning a nonzero flat estimate
+    # here as well would double-charge the budget for every Serper call.
 
     @property
     def enabled(self) -> bool:
@@ -120,7 +139,7 @@ class SerperProvider(SearchProvider):
             body["tbs"] = tbs
 
         payload = await self._fetch(body)
-        self._record_credits(payload)
+        await self._record_credits(payload)
         return self._normalize(payload)[:count]
 
     async def _fetch(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -211,17 +230,19 @@ class SerperProvider(SearchProvider):
             )
         return results
 
-    def _record_credits(self, payload: dict[str, Any]) -> None:
-        """Record the vendor's own credit figure.
+    async def _record_credits(self, payload: dict[str, Any]) -> None:
+        """Record the vendor's own credit figure, in the metric and the budget.
 
         Better than counting calls: it already accounts for the double charge on deep
-        result sets, so the meter cannot silently understate the bill.
+        result sets, so neither meter can silently understate the bill.
         """
         credits = payload.get("credits")
         if isinstance(credits, bool) or not isinstance(credits, (int, float)):
             return
         if credits > 0:
             search_credits_used.labels(str(self.name)).inc(credits)
+            if self.budget is not None:
+                await self.budget.charge(str(self.name), credits * _USD_PER_CREDIT)
 
     async def health(self) -> bool:
         # A probe query would spend a credit, and there is no free status

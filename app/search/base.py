@@ -15,6 +15,7 @@ import time
 
 import httpx
 
+from app.common.budget import Budget, BudgetExceededError, BudgetUnavailableError
 from app.common.circuit import CircuitBreaker, CircuitOpenError
 from app.common.metrics import (
     external_calls,
@@ -42,6 +43,17 @@ class SearchProviderError(RuntimeError):
         self.retryable = retryable
 
 
+class BudgetExceededSearchError(SearchProviderError):
+    """The spend ceiling refused this call before it was made — no money spent.
+
+    A SearchProviderError subtype (not a bare BudgetExceededError) so the
+    orchestrator's existing fallback handling covers it for free: if Serper is
+    over budget, falling to Brave is only right when Brave has its OWN
+    headroom, which the same check on Brave's own `search()` call enforces —
+    this does not bypass to a provider that would also refuse.
+    """
+
+
 class SearchProvider(abc.ABC):
     """One search backend."""
 
@@ -51,9 +63,15 @@ class SearchProvider(abc.ABC):
     #: True when a call to this provider costs money. Drives the cost counters.
     billable: bool = False
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        budget: Budget | None = None,
+    ) -> None:
         self.settings = settings
         self._client = client
+        self.budget = budget
         self.breaker = CircuitBreaker(
             str(self.name),
             fail_threshold=settings.circuit_fail_threshold,
@@ -107,6 +125,18 @@ class SearchProvider(abc.ABC):
         """
         return count
 
+    def estimate_cost_usd(self, results: list[SearchResult]) -> float:
+        """What this call is believed to have cost, for the budget charge.
+
+        Default 0 — correct for non-billable providers and for a billable one
+        that reports its own real spend elsewhere (Serper overrides this to
+        return 0 and charges from its own `credits` figure instead, which is
+        more trustworthy than a guess; see serper.py's `_record_credits`).
+        Override with a list-price estimate for a provider with no such
+        self-reported figure.
+        """
+        return 0.0
+
     @abc.abstractmethod
     async def health(self) -> bool:
         """Cheap liveness probe used by /health. Must not raise."""
@@ -131,6 +161,18 @@ class SearchProvider(abc.ABC):
         if not self.breaker.allows():
             search_provider_calls.labels(str(self.name), "circuit_open").inc()
             raise CircuitOpenError(str(self.name))
+
+        # Budget gate: cost 0, refuses BEFORE any money is spent. Only for
+        # billable providers — a free catalog-style provider has nothing to
+        # gate. See app/common/budget.py for why this fails closed rather than
+        # open like the rest of this codebase.
+        if self.billable and self.budget is not None:
+            try:
+                await self.budget.check()
+            except (BudgetExceededError, BudgetUnavailableError) as exc:
+                search_provider_calls.labels(str(self.name), "budget_refused").inc()
+                log.error("search.budget_refused", provider=str(self.name), error=str(exc))
+                raise BudgetExceededSearchError(str(self.name), str(exc), retryable=False) from exc
 
         # Exclusion is applied around `_search`, never inside it, so a provider
         # only has to opt in to the part it can actually improve on.
@@ -165,6 +207,11 @@ class SearchProvider(abc.ABC):
             external_calls.labels(str(self.name), str(self.billable).lower()).inc()
 
         await self.breaker.record_success()
+
+        if self.billable and self.budget is not None:
+            cost = self.estimate_cost_usd(results)
+            if cost > 0:
+                await self.budget.charge(str(self.name), cost)
 
         if exclude:
             kept = [r for r in results if not is_blocked(r.url, exclude)]

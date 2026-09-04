@@ -211,6 +211,16 @@ class ResultItem(BaseModel):
     #: unrecoverable afterwards without re-fetching every page. Always None on
     #: `/extract`, which has no search result behind it.
     published_at: str | None = None
+    #: Provider-specific engagement/relevance signal — Reddit's post score, a
+    #: tweet's like count when the provider reports one, None for plain web
+    #: search where it isn't meaningful. Added specifically so a caller (the
+    #: Threads pipeline) can enforce its own real-reach floor on social results
+    #: without a second round trip: dropping this silently at the API boundary
+    #: was the actual gap found wiring /social_search into that pipeline — the
+    #: number existed on `SearchResult` internally but never reached the HTTP
+    #: response. None means "not reported," not "zero" — a caller enforcing a
+    #: minimum should treat None as failing that floor, never as passing it.
+    score: float | None = None
 
 
 class SearchResponse(BaseModel):

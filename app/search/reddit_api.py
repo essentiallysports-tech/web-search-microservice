@@ -79,10 +79,21 @@ class RedditApiProvider(SearchProvider):
         params: dict[str, Any] = {
             "q": query,
             "limit": min(count, _MAX_COUNT),
-            "sort": "relevance",
+            # "top" not "relevance": a caller enforcing a minimum score (the
+            # Threads pipeline's MIN_REDDIT_UPVOTES) wastes most of a
+            # relevance-sorted fetch on posts that were always going to be
+            # filtered out. "top" is a standard Reddit API sort value this
+            # reseller almost certainly mirrors, unlike the queryType value in
+            # twitter_api.py's sibling provider — that one stays unverified
+            # rather than stacking a second unconfirmed guess on top of an
+            # already-flagged one.
+            "sort": "top",
         }
-        if t := _TIMEFRAME.get(freshness):
-            params["t"] = t
+        # "top" needs a time window to mean anything (all-time top vs today's
+        # top are very different results) — default to the widest documented
+        # window when the caller didn't ask for a narrower one, rather than
+        # letting this silently fall back to whatever the API defaults to.
+        params["t"] = _TIMEFRAME.get(freshness, "month")
 
         payload = await self._fetch(params)
         return self._normalize(payload)[:count]

@@ -85,7 +85,7 @@ async def social_search(
         results=[
             ResultItem(
                 title=r.title, url=r.url, snippet=r.snippet,
-                from_cache=from_cache, published_at=r.published_at,
+                from_cache=from_cache, published_at=r.published_at, score=r.score,
             )
             for r in outcome.results
         ],

@@ -26,6 +26,17 @@ with a real API key and confirming the response shape matches `_normalize`
 below — a wrong guess here fails LOUDLY (SearchProviderError on any
 unexpected shape, never silently) by design, so the first real call will
 either work or tell you exactly what to fix in this file.
+
+LIKE-COUNT FIELD, same confidence level as the endpoint path above — added
+wiring this into the Threads pipeline, which enforces a hard "1,000+ likes or
+don't use it as a source" floor born from two real incidents (a 2-view and a
+4-view tweet going live as if they were news). `_normalize` below tries
+several plausible field names; if none of them match this reseller's real
+response, `score` comes back None for every result. That is the SAFE failure
+mode by design — the pipeline-side gate treats a missing score as failing the
+floor, never as passing it — but it also means the Twitter tier would return
+zero usable candidates rather than a loud error. Confirm the real field name
+against a live response and fix the list below if that happens.
 """
 
 from __future__ import annotations
@@ -185,11 +196,27 @@ class TwitterApiProvider(SearchProvider):
                     url=url,
                     snippet=text,
                     engine="twitter",
-                    score=None,
+                    score=self._like_count(item),
                     published_at=to_iso8601(created) if isinstance(created, str) else None,
                 )
             )
         return out
+
+    @staticmethod
+    def _like_count(item: dict[str, Any]) -> float | None:
+        """Best-effort — see the module's own confidence note. Tries the
+        official X API v2 shape (`public_metrics.like_count`) plus a few
+        plausible reseller flat-field alternates. Returns None, never 0, when
+        nothing matches — a caller enforcing a minimum must not read a missing
+        count as zero engagement, only as unreported."""
+        metrics = item.get("public_metrics")
+        if isinstance(metrics, dict) and isinstance(metrics.get("like_count"), (int, float)):
+            return float(metrics["like_count"])
+        for key in ("likeCount", "like_count", "favorite_count", "favoriteCount", "likes"):
+            value = item.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return float(value)
+        return None
 
     async def health(self) -> bool:
         # A probe call would spend real credits with no documented free status
